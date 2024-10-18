@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: seeker-ingress
+  namespace: seeker
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-passthrough: 'true'
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+spec:
+  ingressClassName: nginx  # ระบุ IngressClass ที่สร้างขึ้น
+  tls:
+    - hosts:
+        - seeker.defenzalab.com
+      secretName: seeker-tls-secret
+  rules:
+    - host: seeker.defenzalab.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: seeker-nginx-service
+                port:
+                  number: 8443

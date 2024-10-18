@@ -1,0 +1,98 @@
+{{ if .Values.seekerManagedDatabase.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "seeker.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: {{ .Values.updateStrategy }}
+  selector:
+    matchLabels:
+      app: seeker-postgres
+  template:
+    metadata:
+      labels:
+        app: seeker-postgres
+    spec:
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+        - name: {{ .Values.imagePullSecrets }}
+      {{- end }}
+      initContainers:
+        - name: set-data-dir-owner
+          image: {{ .Values.registry }}/{{ .Values.postgres.image }}:{{ .Values.postgres.tag }}
+          # Give `postgres` user permissions to the seeker data volume
+          command:
+            - /bin/sh
+            - -c
+            - |
+              if [ "$EUID" -ne 0 ]; then
+                echo "INFO: User is not root, no need to change data ownership"
+                exit 0
+              fi
+              if [ "$EUID" = "" ]; then
+                echo "INFO: EUID is not set, no need to change data ownership"
+                exit 0
+              fi
+              chown -R "$(id --user postgres)":"$(id --user postgres)" /seeker-data
+          volumeMounts:
+            - name: seeker-data
+              mountPath: "/seeker-data"
+      containers:
+        - name: seeker-postgres
+          image: {{ .Values.registry }}/{{ .Values.postgres.image }}:{{ .Values.postgres.tag }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          args: ["-c", "shared_buffers=512MB", "-c", "max_connections=200", "-c", "work_mem=32MB"]
+          env:
+            - name: PGDATA
+              value: "/seeker-data/data/server/{{ .Values.postgres.dataFolderName }}"
+            - name: POSTGRES_PASSWORD_FILE
+              value: "/opt/seeker/secrets/dbpass"
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: "md5"
+            {{- include "seeker.db.env.vars" . | nindent 12 }}
+          ports:
+            - containerPort: 5432
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          volumeMounts:
+            - name: seeker-data
+              mountPath: "/seeker-data"
+            - name: dshm
+              mountPath: /dev/shm
+            - name: dbpass
+              mountPath: "/opt/seeker/secrets"
+              readOnly: true
+      volumes:
+        - name: seeker-data
+          persistentVolumeClaim:
+            claimName: {{ .Release.Name }}-data-pvc
+        - name: dbpass
+          secret:
+            secretName: {{ .Values.externalDatabasePasswordSecret }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seeker-postgres-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: ClusterIP
+  selector:
+    app: seeker-postgres
+  ports:
+    - name: "db-connector"
+      protocol: TCP
+      port: 5432
+      targetPort: 5432
+{{ end }}
